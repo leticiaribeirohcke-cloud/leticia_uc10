@@ -1,107 +1,90 @@
-const courseGrid = document.querySelector("#courseGrid");
-const courseCount = document.querySelector("#courseCount");
-const filterButtons = document.querySelectorAll(".filter-button");
-const leadForm = document.querySelector("#leadForm");
-const formMessage = document.querySelector("#formMessage");
-const menuToggle = document.querySelector("#menuToggle");
-const mainNav = document.querySelector("#mainNav");
+// app.js — comportamento da interface
+// Captura os eventos do formulário, envia requisições à API, carrega as tarefas e atualiza a página após cadastrar, concluir ou excluir uma tarefa.
+// Ele utiliza fetch() para conversar com o servidor.
 
-const courseIcons = ["⌘", "▦", "✳", "◉", "⌁", "↗"];
+const form = document.querySelector('#task-form');
+const titleInput = document.querySelector('#title');
+const descriptionInput = document.querySelector('#description');
+const taskList = document.querySelector('#task-list');
+const emptyState = document.querySelector('#empty-state');
+const taskCount = document.querySelector('#task-count');
+const message = document.querySelector('#message');
 
-function escapeHTML(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-  }[character]));
+async function request(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
+  if (!response.ok) {
+    const data = response.status === 204 ? {} : await response.json();
+    throw new Error(data.error || 'Ocorreu um erro inesperado.');
+  }
+  return response.status === 204 ? null : response.json();
 }
 
-function renderCourses(courses) {
-  courseCount.textContent = `${courses.length} ${courses.length === 1 ? "curso encontrado" : "cursos disponíveis"}`;
-  if (!courses.length) {
-    courseGrid.innerHTML = '<div class="loading-card">Nenhum curso encontrado nesta modalidade.</div>';
-    return;
+function createTaskElement(task) {
+  const li = document.createElement('li');
+  li.className = `task-card${task.completed ? ' completed' : ''}`;
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = task.completed;
+  checkbox.setAttribute('aria-label', `Concluir ${task.title}`);
+  checkbox.addEventListener('change', async () => {
+    try { await request(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ completed: checkbox.checked }) }); await loadTasks(); }
+    catch (error) { message.textContent = error.message; }
+  });
+
+  const content = document.createElement('div');
+  content.className = 'task-content';
+  const title = document.createElement('div');
+  title.className = 'task-title';
+  title.textContent = task.title;
+  content.appendChild(title);
+  if (task.description) {
+    const description = document.createElement('p');
+    description.className = 'task-description';
+    description.textContent = task.description;
+    content.appendChild(description);
   }
 
-  courseGrid.innerHTML = courses.map((course, index) => `
-    <article class="course-card">
-      <div class="course-topline">
-        <span class="course-category">${escapeHTML(course.category)}</span>
-        <span class="course-modality ${course.modality === "Presencial" ? "presencial" : ""}">${escapeHTML(course.modality)}</span>
-      </div>
-      <div class="course-icon" aria-hidden="true">${courseIcons[index % courseIcons.length]}</div>
-      <h3>${escapeHTML(course.title)}</h3>
-      <p>${escapeHTML(course.description)}</p>
-      <div class="course-footer">
-        <span class="course-duration">${escapeHTML(course.duration)}</span>
-        <a class="course-link" href="#contato" data-course="${escapeHTML(course.title)}">Tenho interesse <span>↗</span></a>
-      </div>
-    </article>
-  `).join("");
-
-  courseGrid.querySelectorAll("[data-course]").forEach((link) => {
-    link.addEventListener("click", () => {
-      const interest = document.querySelector("#interest");
-      interest.value = "Ainda não sei";
-      document.querySelector("#name").focus({ preventScroll: true });
-    });
+  const removeButton = document.createElement('button');
+  removeButton.className = 'delete-button';
+  removeButton.type = 'button';
+  removeButton.textContent = 'Excluir';
+  removeButton.addEventListener('click', async () => {
+    try { await request(`/api/tasks/${task.id}`, { method: 'DELETE' }); await loadTasks(); }
+    catch (error) { message.textContent = error.message; }
   });
+
+  li.append(checkbox, content, removeButton);
+  return li;
 }
 
-async function loadCourses(modality = "Todos") {
-  courseGrid.innerHTML = '<div class="loading-card">Carregando cursos...</div>';
+async function loadTasks() {
   try {
-    const query = modality === "Todos" ? "" : `?modality=${encodeURIComponent(modality)}`;
-    const response = await fetch(`/api/courses${query}`);
-    if (!response.ok) throw new Error("Falha ao consultar cursos.");
-    renderCourses(await response.json());
-  } catch (_error) {
-    courseGrid.innerHTML = '<div class="loading-card">Não foi possível carregar os cursos. Tente novamente mais tarde.</div>';
-    courseCount.textContent = "Cursos indisponíveis";
+    const tasks = await request('/api/tasks');
+    taskList.replaceChildren(...tasks.map(createTaskElement));
+    emptyState.hidden = tasks.length > 0;
+    taskCount.textContent = `${tasks.length} ${tasks.length === 1 ? 'tarefa' : 'tarefas'}`;
+  } catch (error) {
+    message.textContent = error.message;
   }
 }
 
-filterButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    filterButtons.forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    loadCourses(button.dataset.filter);
-  });
-});
-
-leadForm.addEventListener("submit", async (event) => {
+form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  formMessage.textContent = "";
-  formMessage.className = "form-message";
-
-  const payload = Object.fromEntries(new FormData(leadForm).entries());
+  message.textContent = '';
   try {
-    const response = await fetch("/api/leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+    await request('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ title: titleInput.value, description: descriptionInput.value })
     });
-    const result = await response.json();
-    if (!response.ok) {
-      formMessage.textContent = result.details?.join(" ") || result.error || "Confira os dados e tente novamente.";
-      formMessage.classList.add("error");
-      return;
-    }
-    formMessage.textContent = result.message;
-    formMessage.classList.add("success");
-    leadForm.reset();
-  } catch (_error) {
-    formMessage.textContent = "Não foi possível enviar agora. Tente novamente.";
-    formMessage.classList.add("error");
-  }
+    form.reset();
+    titleInput.focus();
+    message.textContent = 'Tarefa adicionada com sucesso!';
+    await loadTasks();
+  } catch (error) { message.textContent = error.message; }
 });
 
-menuToggle.addEventListener("click", () => {
-  const isOpen = mainNav.classList.toggle("open");
-  menuToggle.setAttribute("aria-expanded", String(isOpen));
-  menuToggle.setAttribute("aria-label", isOpen ? "Fechar menu" : "Abrir menu");
-});
-mainNav.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => {
-  mainNav.classList.remove("open");
-  menuToggle.setAttribute("aria-expanded", "false");
-}));
-
-loadCourses();
+loadTasks();

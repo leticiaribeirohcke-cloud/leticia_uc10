@@ -1,63 +1,54 @@
-const express = require("express");
-const path = require("path");
-const { all, get, run } = require("./database");
-const { validateLead, normalizeCourseFilter } = require("./validation");
+/* app.js — rotas da API
+Configura o Express e define os endpoints que recebem as solicitações da interface.
+- GET /api/tasks: lista tarefas.
+- POST /api/tasks: cadastra uma tarefa.
+- PATCH /api/tasks/:id: altera o estado de conclusão.
+- DELETE /api/tasks/:id: exclui uma tarefa. */
+
+const express = require('express');
+const path = require('path');
+const { validateTaskInput } = require('./validation');
+const { createTaskService } = require('./taskService');
 
 function createApp(db) {
   const app = express();
+  const tasks = createTaskService(db);
 
   app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-  app.use(express.static(path.join(__dirname, "../public")));
+  app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", message: "Academia Viva API funcionando." });
+  app.get('/api/tasks', async (req, res) => {
+    try { res.json(await tasks.list()); }
+    catch { res.status(500).json({ error: 'Não foi possível listar as tarefas.' }); }
   });
 
-  app.get("/api/courses", async (req, res) => {
-    try {
-      const modality = normalizeCourseFilter(req.query.modality);
-      const courses = modality
-        ? await all(db, "SELECT * FROM courses WHERE modality = ? ORDER BY featured DESC, id", [modality])
-        : await all(db, "SELECT * FROM courses ORDER BY featured DESC, id");
-      res.json(courses);
-    } catch (_error) {
-      res.status(500).json({ error: "Não foi possível carregar os cursos." });
-    }
+  app.post('/api/tasks', async (req, res) => {
+    const result = validateTaskInput(req.body);
+    if (!result.valid) return res.status(400).json({ error: result.error });
+    try { res.status(201).json(await tasks.create(result.data)); }
+    catch { res.status(500).json({ error: 'Não foi possível criar a tarefa.' }); }
   });
 
-  app.get("/api/courses/:id", async (req, res) => {
-    try {
-      const course = await get(db, "SELECT * FROM courses WHERE id = ?", [req.params.id]);
-      if (!course) return res.status(404).json({ error: "Curso não encontrado." });
-      res.json(course);
-    } catch (_error) {
-      res.status(500).json({ error: "Não foi possível carregar o curso." });
+  app.patch('/api/tasks/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || typeof req.body.completed !== 'boolean') {
+      return res.status(400).json({ error: 'Informe um ID válido e completed como booleano.' });
     }
+    try {
+      const task = await tasks.setCompleted(id, req.body.completed);
+      if (!task) return res.status(404).json({ error: 'Tarefa não encontrada.' });
+      res.json(task);
+    } catch { res.status(500).json({ error: 'Não foi possível atualizar a tarefa.' }); }
   });
 
-  app.post("/api/leads", async (req, res) => {
-    const lead = {
-      name: req.body.name,
-      email: req.body.email,
-      phone: req.body.phone || "",
-      interest: req.body.interest || "Ainda não sei"
-    };
-    const validation = validateLead(lead);
-
-    if (!validation.valid) {
-      return res.status(400).json({ error: "Verifique os dados informados.", details: validation.errors });
-    }
-
+  app.delete('/api/tasks/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'ID inválido.' });
     try {
-      const result = await run(db,
-        "INSERT INTO leads (name, email, phone, interest) VALUES (?, ?, ?, ?)",
-        [lead.name.trim(), lead.email.trim().toLowerCase(), lead.phone.trim(), lead.interest]
-      );
-      res.status(201).json({ message: "Cadastro recebido com sucesso!", leadId: result.id });
-    } catch (_error) {
-      res.status(500).json({ error: "Não foi possível registrar seu contato." });
-    }
+      const removed = await tasks.remove(id);
+      if (!removed) return res.status(404).json({ error: 'Tarefa não encontrada.' });
+      res.status(204).end();
+    } catch { res.status(500).json({ error: 'Não foi possível excluir a tarefa.' }); }
   });
 
   return app;
